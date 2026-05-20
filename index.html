@@ -9,6 +9,8 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         * {
             margin: 0;
@@ -193,7 +195,6 @@
                 opacity: 0;
                 transform: translateY(8px);
             }
-
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -450,12 +451,18 @@
             margin-bottom: 15px;
         }
 
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2rem;
+            color: #666;
+        }
+
         @media (max-width: 650px) {
             .top-bar {
                 flex-direction: column;
                 align-items: stretch;
             }
-
             .nav-links {
                 justify-content: center;
             }
@@ -586,30 +593,240 @@
     </div>
 
     <script>
-        // DATOS GLOBALES
+        // ========== CONFIGURACIÓN DE SUPABASE ==========
+        // ⚠️ IMPORTANTE: Reemplaza estos valores con los de tu proyecto en Supabase
+        const SUPABASE_URL = 'https://euefdobkeftkwloqieeq.supabase.co';  // Reemplaza con tu URL
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1ZWZkb2JrZWZ0a3dsb3FpZWVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyNjg1NDUsImV4cCI6MjA5NDg0NDU0NX0.InjxCip87iV4kYMvfhyZ_2M6qAIcungagm5QlO97Mrg';  // Reemplaza con tu anon key pública
+        
+        // Crear cliente de Supabase
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        // ========== DATOS GLOBALES ==========
         let productos = [];
         let ventas = [];
         let currentUserRole = null;
         let chartTop = null, chartInv = null;
 
-        // ========== ALMACENAMIENTO ==========
-        function saveToLocal() {
-            localStorage.setItem('tech_prod', JSON.stringify(productos));
-            localStorage.setItem('tech_ventas', JSON.stringify(ventas));
-        }
-        function loadFromLocal() {
-            const prodStored = localStorage.getItem('tech_prod');
-            const ventStored = localStorage.getItem('tech_ventas');
-            if (prodStored) productos = JSON.parse(prodStored);
-            if (ventStored) ventas = JSON.parse(ventStored);
-            if (!productos.length) {
-                productos = [
-                ];
-                ventas = [
-                ];
-                saveToLocal();
+        // ========== FUNCIONES DE SUPABASE - PRODUCTOS ==========
+        
+        // Cargar productos desde Supabase
+        async function loadProductos() {
+            try {
+                const { data, error } = await supabase
+                    .from('productos')
+                    .select('*')
+                    .order('id', { ascending: false });
+                
+                if (error) throw error;
+                
+                if (data && data.length > 0) {
+                    productos = data.map(p => ({
+                        ...p,
+                        galleryArray: p.gallery_array || []
+                    }));
+                } else {
+                    productos = [];
+                }
+                
+                // Asegurar que cada producto tenga galleryArray
+                productos.forEach(p => {
+                    if (!p.galleryArray || p.galleryArray.length === 0) {
+                        p.galleryArray = p.thumb ? [p.thumb] : ["https://picsum.photos/id/13/200/200"];
+                    }
+                });
+                
+                return true;
+            } catch (error) {
+                console.error('Error cargando productos:', error);
+                alert('Error al conectar con la base de datos. Verifica tu conexión a Supabase.');
+                return false;
             }
-            productos.forEach(p => { if (!p.galleryArray) p.galleryArray = [p.thumb || "https://picsum.photos/id/13/200/200"]; if (!p.thumb) p.thumb = p.galleryArray[0]; });
+        }
+        
+        // Cargar ventas desde Supabase
+        async function loadVentas() {
+            try {
+                const { data, error } = await supabase
+                    .from('ventas')
+                    .select('*')
+                    .order('fecha', { ascending: false });
+                
+                if (error) throw error;
+                
+                ventas = data || [];
+                
+                // Convertir formato para compatibilidad
+                ventas = ventas.map(v => ({
+                    id: v.id,
+                    productoId: v.producto_id,
+                    cantidad: v.cantidad,
+                    precioUnitario: v.precio_unitario,
+                    subtotal: v.subtotal,
+                    fecha: v.fecha
+                }));
+                
+                return true;
+            } catch (error) {
+                console.error('Error cargando ventas:', error);
+                ventas = [];
+                return false;
+            }
+        }
+        
+        // Cargar todos los datos desde Supabase
+        async function loadFromSupabase() {
+            const container = document.getElementById('productsList');
+            if (container) container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Cargando datos...</div>';
+            
+            const successProd = await loadProductos();
+            const successVent = await loadVentas();
+            
+            if (successProd || successVent) {
+                renderProductos();
+                if (currentUserRole === 'admin') renderEstadisticas();
+            }
+        }
+        
+        // Agregar nuevo producto
+        async function agregarProducto(producto) {
+            try {
+                const { data, error } = await supabase
+                    .from('productos')
+                    .insert([{
+                        id: producto.id,
+                        nombre: producto.nombre,
+                        precio: producto.precio,
+                        descripcion: producto.descripcion,
+                        thumb: producto.thumb,
+                        gallery_array: producto.galleryArray,
+                        stock: producto.stock,
+                        estado: producto.estado
+                    }])
+                    .select();
+                
+                if (error) throw error;
+                
+                productos.push({ ...producto, galleryArray: producto.galleryArray });
+                renderProductos();
+                if (currentUserRole === 'admin') renderEstadisticas();
+                
+                return true;
+            } catch (error) {
+                console.error('Error agregando producto:', error);
+                alert('Error al guardar en la base de datos: ' + error.message);
+                return false;
+            }
+        }
+        
+        // Actualizar producto existente
+        async function actualizarProducto(id, updates) {
+            try {
+                const { data, error } = await supabase
+                    .from('productos')
+                    .update({
+                        nombre: updates.nombre,
+                        precio: updates.precio,
+                        descripcion: updates.descripcion,
+                        thumb: updates.thumb,
+                        gallery_array: updates.galleryArray,
+                        stock: updates.stock,
+                        estado: updates.estado,
+                        updated_at: new Date()
+                    })
+                    .eq('id', id)
+                    .select();
+                
+                if (error) throw error;
+                
+                const index = productos.findIndex(p => p.id === id);
+                if (index !== -1) {
+                    productos[index] = { ...productos[index], ...updates, galleryArray: updates.galleryArray };
+                }
+                
+                renderProductos();
+                if (currentUserRole === 'admin') renderEstadisticas();
+                
+                return true;
+            } catch (error) {
+                console.error('Error actualizando producto:', error);
+                alert('Error al actualizar en la base de datos: ' + error.message);
+                return false;
+            }
+        }
+        
+        // Eliminar producto
+        async function eliminarProducto(id) {
+            try {
+                // Verificar si tiene ventas asociadas
+                const tieneVentas = ventas.some(v => v.productoId === id);
+                
+                if (tieneVentas && !confirm("Este producto tiene ventas asociadas. Si lo eliminas, las ventas también se eliminarán. ¿Continuar?")) {
+                    return false;
+                }
+                
+                const { error } = await supabase
+                    .from('productos')
+                    .delete()
+                    .eq('id', id);
+                
+                if (error) throw error;
+                
+                // Eliminar también las ventas asociadas en el array local
+                productos = productos.filter(p => p.id !== id);
+                ventas = ventas.filter(v => v.productoId !== id);
+                
+                renderProductos();
+                if (currentUserRole === 'admin') renderEstadisticas();
+                
+                return true;
+            } catch (error) {
+                console.error('Error eliminando producto:', error);
+                alert('Error al eliminar de la base de datos: ' + error.message);
+                return false;
+            }
+        }
+        
+        // Registrar venta
+        async function registrarVenta(venta) {
+            try {
+                const { data, error } = await supabase
+                    .from('ventas')
+                    .insert([{
+                        id: venta.id,
+                        producto_id: venta.productoId,
+                        cantidad: venta.cantidad,
+                        precio_unitario: venta.precioUnitario,
+                        subtotal: venta.subtotal,
+                        fecha: venta.fecha
+                    }])
+                    .select();
+                
+                if (error) throw error;
+                
+                ventas.push(venta);
+                
+                // Actualizar stock del producto
+                const producto = productos.find(p => p.id === venta.productoId);
+                if (producto) {
+                    const newStock = producto.stock - venta.cantidad;
+                    const newEstado = newStock === 0 ? 'agotado' : (newStock > 0 ? 'disponible' : producto.estado);
+                    
+                    await actualizarProducto(venta.productoId, {
+                        ...producto,
+                        stock: newStock,
+                        estado: newEstado
+                    });
+                }
+                
+                renderProductos();
+                if (currentUserRole === 'admin') renderEstadisticas();
+                
+                return true;
+            } catch (error) {
+                console.error('Error registrando venta:', error);
+                alert('Error al registrar la venta: ' + error.message);
+                return false;
+            }
         }
 
         // ========== RENDER PRODUCTOS (con filtros) ==========
@@ -626,7 +843,7 @@
                 <img class="card-img" src="${prod.thumb}" alt="${prod.nombre}" onerror="this.src='https://picsum.photos/id/13/200/200'">
                 <div class="card-body">
                     <div class="product-title">${prod.nombre} <span class="price">$${prod.precio.toFixed(2)}</span></div>
-                    <div class="description">${prod.descripcion.substring(0, 80)}</div>
+                    <div class="description">${prod.descripcion ? prod.descripcion.substring(0, 80) : ''}</div>
                     <div><span class="stock-badge"><i class="fas fa-boxes"></i> Stock: ${prod.stock}</span></div>
                     <div><span class="status status-${prod.estado === 'disponible' ? 'disponible' : (prod.estado === 'agotado' ? 'agotado' : 'proceso')}">
                         ${prod.estado === 'disponible' ? '✓ Disponible' : (prod.estado === 'agotado' ? '✗ Agotado' : '⏳ En proceso')}
@@ -650,9 +867,9 @@
                 });
             });
             if (currentUserRole === 'admin') {
-                document.querySelectorAll('.edit-action').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); openEditModal(parseInt(btn.dataset.id)); }));
-                document.querySelectorAll('.delete-action').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm("¿Eliminar producto?")) deleteProduct(parseInt(btn.dataset.id)); }));
-                document.querySelectorAll('.sell-action').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); quickSell(parseInt(btn.dataset.id)); }));
+                document.querySelectorAll('.edit-action').forEach(btn => btn.addEventListener('click', async (e) => { e.stopPropagation(); openEditModal(parseInt(btn.dataset.id)); }));
+                document.querySelectorAll('.delete-action').forEach(btn => btn.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm("¿Eliminar producto?")) await eliminarProducto(parseInt(btn.dataset.id)); }));
+                document.querySelectorAll('.sell-action').forEach(btn => btn.addEventListener('click', async (e) => { e.stopPropagation(); await quickSell(parseInt(btn.dataset.id)); }));
             }
         }
 
@@ -662,9 +879,9 @@
             if (!prod) return;
             document.getElementById('modalTitle').innerText = prod.nombre;
             document.getElementById('modalPrice').innerHTML = `$${prod.precio.toFixed(2)}`;
-            document.getElementById('modalDesc').innerText = prod.descripcion;
+            document.getElementById('modalDesc').innerText = prod.descripcion || 'Sin descripción';
             document.getElementById('modalStock').innerText = prod.stock;
-            document.getElementById('modalStatus').innerHTML = `<span class="status status-${prod.estado}">${prod.estado}</span>`;
+            document.getElementById('modalStatus').innerHTML = `<span class="status status-${prod.estado}">${prod.estado === 'disponible' ? 'Disponible' : (prod.estado === 'agotado' ? 'Agotado' : 'En proceso')}</span>`;
             document.getElementById('modalMainImage').src = prod.thumb;
             const galleryDiv = document.getElementById('modalGallery');
             galleryDiv.innerHTML = '';
@@ -679,6 +896,7 @@
             }
             document.getElementById('productModal').style.display = 'flex';
         }
+        
         function closeDetailModal() { document.getElementById('productModal').style.display = 'none'; }
         document.getElementById('closeModalBtn')?.addEventListener('click', closeDetailModal);
         window.addEventListener('click', (e) => { if (e.target === document.getElementById('productModal')) closeDetailModal(); if (e.target === document.getElementById('editModal')) closeEditModal(); });
@@ -690,28 +908,30 @@
             document.getElementById('editId').value = prod.id;
             document.getElementById('editName').value = prod.nombre;
             document.getElementById('editPrice').value = prod.precio;
-            document.getElementById('editDesc').value = prod.descripcion;
-            document.getElementById('editThumb').value = prod.thumb;
-            document.getElementById('editGalleryUrls').value = prod.galleryArray.join(',');
+            document.getElementById('editDesc').value = prod.descripcion || '';
+            document.getElementById('editThumb').value = prod.thumb || '';
+            document.getElementById('editGalleryUrls').value = (prod.galleryArray || []).join(',');
             document.getElementById('editStock').value = prod.stock;
             document.getElementById('editEstado').value = prod.estado;
             document.getElementById('editModal').style.display = 'flex';
         }
+        
         function closeEditModal() { document.getElementById('editModal').style.display = 'none'; }
         document.getElementById('cancelEditBtn')?.addEventListener('click', closeEditModal);
-        document.getElementById('editFormModal')?.addEventListener('submit', (e) => {
+        
+        document.getElementById('editFormModal')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             const id = parseInt(document.getElementById('editId').value);
             const index = productos.findIndex(p => p.id === id);
             if (index !== -1) {
                 const galStr = document.getElementById('editGalleryUrls').value;
-                const galleryArray = galStr.split(',').map(s => s.trim()).filter(s => s);
+                const galleryArray = galStr ? galStr.split(',').map(s => s.trim()).filter(s => s) : [];
                 const newStock = parseInt(document.getElementById('editStock').value);
                 let newEstado = document.getElementById('editEstado').value;
                 if (newStock === 0 && newEstado !== 'agotado') newEstado = 'agotado';
                 if (newStock > 0 && newEstado === 'agotado') newEstado = 'disponible';
-                productos[index] = {
-                    ...productos[index],
+                
+                const updatedProduct = {
                     nombre: document.getElementById('editName').value,
                     precio: parseFloat(document.getElementById('editPrice').value),
                     descripcion: document.getElementById('editDesc').value,
@@ -720,43 +940,36 @@
                     stock: newStock,
                     estado: newEstado
                 };
-                saveToLocal();
-                renderProductos();
-                if (currentUserRole === 'admin') renderEstadisticas();
+                
+                await actualizarProducto(id, updatedProduct);
                 closeEditModal();
             }
         });
 
-        // ========== ADMIN: ELIMINAR ==========
-        function deleteProduct(id) {
-            const hasSales = ventas.some(v => v.productoId === id);
-            if (hasSales && !confirm("Este producto tiene ventas, si eliminas se perderán. ¿Continuar?")) return;
-            ventas = ventas.filter(v => v.productoId !== id);
-            productos = productos.filter(p => p.id !== id);
-            saveToLocal();
-            renderProductos();
-            if (currentUserRole === 'admin') renderEstadisticas();
-        }
-
         // ========== ADMIN: VENDER RÁPIDO ==========
-        function quickSell(id) {
+        async function quickSell(id) {
             const prod = productos.find(p => p.id === id);
             if (!prod || prod.stock <= 0) { alert("No hay stock disponible"); return; }
             let qty = prompt(`Vender ${prod.nombre}, stock: ${prod.stock}`, "1");
             if (!qty) return;
             qty = parseInt(qty);
             if (isNaN(qty) || qty <= 0 || qty > prod.stock) { alert("Cantidad no válida"); return; }
-            ventas.push({ id: Date.now(), productoId: prod.id, cantidad: qty, precioUnitario: prod.precio, fecha: new Date().toISOString(), subtotal: qty * prod.precio });
-            prod.stock -= qty;
-            if (prod.stock === 0) prod.estado = 'agotado';
-            saveToLocal();
-            renderProductos();
-            if (currentUserRole === 'admin') renderEstadisticas();
+            
+            const nuevaVenta = { 
+                id: Date.now(), 
+                productoId: prod.id, 
+                cantidad: qty, 
+                precioUnitario: prod.precio, 
+                fecha: new Date().toISOString(), 
+                subtotal: qty * prod.precio 
+            };
+            
+            await registrarVenta(nuevaVenta);
             alert(`Venta registrada: ${qty} unidades`);
         }
 
         // ========== AGREGAR PRODUCTO (formulario) ==========
-        document.getElementById('productForm')?.addEventListener('submit', (e) => {
+        document.getElementById('productForm')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             const nombre = document.getElementById('prodName').value.trim();
             const precio = parseFloat(document.getElementById('prodPrice').value);
@@ -765,17 +978,29 @@
             const galStr = document.getElementById('prodGallery').value;
             let gallery = galStr ? galStr.split(',').map(s => s.trim()).filter(s => s) : [];
             const stock = parseInt(document.getElementById('prodStock').value) || 0;
+            
             if (!nombre || isNaN(precio)) { alert("Complete nombre y precio"); return; }
             if (gallery.length === 0 && thumb) gallery = [thumb];
             if (!thumb && gallery.length) thumb = gallery[0];
             if (!thumb) thumb = "https://picsum.photos/id/13/200/200";
+            
             const estado = stock > 0 ? "disponible" : "agotado";
-            productos.push({ id: Date.now(), nombre, precio, descripcion: desc, thumb, galleryArray: gallery, stock, estado });
-            saveToLocal();
-            document.getElementById('productForm').reset();
-            renderProductos();
-            if (currentUserRole === 'admin') renderEstadisticas();
-            alert("Producto agregado correctamente");
+            const nuevoProducto = { 
+                id: Date.now(), 
+                nombre, 
+                precio, 
+                descripcion: desc, 
+                thumb, 
+                galleryArray: gallery, 
+                stock, 
+                estado 
+            };
+            
+            const success = await agregarProducto(nuevoProducto);
+            if (success) {
+                document.getElementById('productForm').reset();
+                alert("Producto agregado correctamente");
+            }
         });
 
         // ========== ESTADÍSTICAS (solo admin) ==========
@@ -810,7 +1035,7 @@
             chartInv = new Chart(ctxInv, { type: 'doughnut', data: { labels: ['Disponible', 'En proceso', 'Agotado'], datasets: [{ data: [valDisp, valProc, valAgo], backgroundColor: ['#28a745', '#ffc107', '#dc3545'] }] } });
         }
 
-        // ========== EXPORTAR / IMPORTAR (funciones globales) ==========
+        // ========== EXPORTAR / IMPORTAR (funciones de respaldo) ==========
         function exportData() {
             const data = { productos, ventas };
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -820,23 +1045,37 @@
             link.click();
             URL.revokeObjectURL(link.href);
         }
+        
         function importData(file) {
             const reader = new FileReader();
-            reader.onload = (e) => {
+            reader.onload = async (e) => {
                 try {
                     const imported = JSON.parse(e.target.result);
                     if (imported.productos && imported.ventas) {
-                        productos = imported.productos;
-                        ventas = imported.ventas;
-                        saveToLocal();
-                        renderProductos();
-                        if (currentUserRole === 'admin') renderEstadisticas();
-                        alert("Datos importados correctamente");
+                        if (confirm("Esta acción reemplazará todos los datos actuales en la base de datos. ¿Continuar?")) {
+                            // Primero limpiar la base de datos
+                            for (const prod of productos) {
+                                await supabase.from('productos').delete().eq('id', prod.id);
+                            }
+                            // Luego importar los nuevos datos
+                            for (const prod of imported.productos) {
+                                await agregarProducto({
+                                    ...prod,
+                                    galleryArray: prod.galleryArray || prod.gallery_array || []
+                                });
+                            }
+                            for (const venta of imported.ventas) {
+                                await registrarVenta(venta);
+                            }
+                            await loadFromSupabase();
+                            alert("Datos importados correctamente");
+                        }
                     } else alert("Formato inválido: se espera { productos, ventas }");
                 } catch (err) { alert("Error al leer el archivo JSON"); }
             };
             reader.readAsText(file);
         }
+        
         function triggerImport() {
             const input = document.createElement('input');
             input.type = 'file';
@@ -858,20 +1097,16 @@
                 <button class="nav-btn" id="exportNavBtn"><i class="fas fa-download"></i> Exportar</button>
                 <button class="nav-btn" id="importNavBtn"><i class="fas fa-upload"></i> Importar</button>
             `;
-                // Asignar eventos de exportar/importar desde el nav
                 document.getElementById('exportNavBtn')?.addEventListener('click', exportData);
                 document.getElementById('importNavBtn')?.addEventListener('click', triggerImport);
             } else {
                 navDiv.innerHTML = `<button class="nav-btn" data-section="products"><i class="fas fa-store"></i> Tienda</button>`;
             }
-            // Eventos de navegación
             document.querySelectorAll('.nav-btn[data-section]').forEach(btn => {
                 btn.addEventListener('click', () => showSection(btn.dataset.section));
             });
             document.getElementById('userRoleSpan').innerText = role === 'admin' ? 'Administrador' : 'Cliente';
             showSection('products');
-            renderProductos();
-            if (role === 'admin') renderEstadisticas();
         }
 
         function showSection(section) {
@@ -891,19 +1126,36 @@
             else if (user === 'admin' && pass === 'R4bnWNvu') { currentUserRole = 'admin'; doLogin(); }
             else { document.getElementById('loginError').innerText = 'Credenciales incorrectas'; }
         });
-        function doLogin() {
+        
+        async function doLogin() {
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('appContainer').style.display = 'block';
-            loadFromLocal();
+            await loadFromSupabase();
             setupUI(currentUserRole);
         }
+        
         document.getElementById('logoutBtn')?.addEventListener('click', () => {
             document.getElementById('loginContainer').style.display = 'flex';
             document.getElementById('appContainer').style.display = 'none';
             currentUserRole = null;
         });
+        
         document.getElementById('searchProduct')?.addEventListener('input', () => renderProductos());
         document.getElementById('filterStatus')?.addEventListener('change', () => renderProductos());
+        
+        // Verificar conexión a Supabase al cargar la página
+        async function checkSupabaseConnection() {
+            try {
+                const { data, error } = await supabase.from('productos').select('count', { count: 'exact', head: true });
+                if (error) throw error;
+                console.log('✅ Conexión a Supabase establecida');
+            } catch (error) {
+                console.warn('⚠️ No se pudo conectar a Supabase:', error.message);
+                console.warn('Verifica que SUPABASE_URL y SUPABASE_ANON_KEY sean correctos');
+            }
+        }
+        
+        checkSupabaseConnection();
     </script>
 </body>
 
